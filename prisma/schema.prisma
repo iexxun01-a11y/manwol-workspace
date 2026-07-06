@@ -1,0 +1,203 @@
+// 만월연회 워크스페이스 - Prisma 스키마
+// Phase별로 모델이 추가됨. 현재: Phase 1-2 (코어 + 인증)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── 역할 ──
+enum Role {
+  OWNER   // 대표 — 전권 + 승인
+  MANAGER // 관리자 — 권한 부여용 자리 (현재는 MEMBER와 유사)
+  MEMBER  // 일반 직원
+}
+
+// ── 직원 상태 ──
+enum UserStatus {
+  INVITED  // 초대됨 (첫 로그인 전)
+  ACTIVE
+  INACTIVE // 퇴사 등 — 삭제 대신 비활성 (과거 데이터 보존)
+}
+
+// ── 태스크 상태 ──
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+// ── 우선순위 ──
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// ── 직원 ──
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  emailVerified DateTime?  // NextAuth PrismaAdapter 필수 필드
+  name          String
+  role          Role       @default(MEMBER)
+  position      String?    // 직급 (텍스트 — enum 금지, 자유롭게 추가 가능)
+  status        UserStatus @default(INVITED)
+  firstLoginAt  DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  authoredTasks Task[]     @relation("TaskAuthor")
+  assignedTasks Task[]     @relation("TaskAssignee")
+  uploadedFiles File[]
+  sessions      Session[]
+  accounts      Account[]
+  invitesSent   InviteLog[] @relation("InvitesSent")
+
+  @@index([email])
+  @@index([status])
+}
+
+// ── NextAuth v5 세션 (데이터베이스 세션 전략) ──
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ── NextAuth v5 계정 (확장용, 현재 미사용) ──
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+// ── NextAuth v5 매직링크 토큰 ──
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ── 초대 로그 (누가 누구를 초대했는지 추적) ──
+model InviteLog {
+  id           String   @id @default(cuid())
+  invitedBy    String
+  invitedEmail String
+  createdAt    DateTime @default(now())
+  inviter      User     @relation("InvitesSent", fields: [invitedBy], references: [id])
+
+  @@index([invitedEmail])
+}
+
+// ── 태스크 (= 칸반 카드 = 페이지 = 캘린더 항목) ──
+// 하나의 모델을 세 가지 뷰로 보여준다. 절대 쪼개지 말 것.
+model Task {
+  id         String     @id @default(cuid())
+  title      String
+  content    String     @default("") // 페이지 본문 (마크다운/리치텍스트)
+  status     TaskStatus @default(TODO)
+  priority   Priority   @default(MEDIUM)
+  dueDate    DateTime?               // 캘린더 배치 기준
+  order      Int        @default(0)  // 칸반 내 정렬 순서
+  assigneeId String?
+  authorId   String
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  author   User     @relation("TaskAuthor",   fields: [authorId],   references: [id])
+  assignee User?    @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  files    File[]
+  tags     TaskTag[]
+
+  @@index([status, order])
+  @@index([dueDate])
+  @@index([assigneeId])
+  @@index([authorId])
+}
+
+// ── 태그 ──
+model Tag {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  color     String    @default("#6b7280") // hex color
+  createdAt DateTime  @default(now())
+  tasks     TaskTag[]
+}
+
+// ── 태스크-태그 연결 ──
+model TaskTag {
+  taskId String
+  tagId  String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, tagId])
+  @@index([taskId])
+  @@index([tagId])
+}
+
+// ── 파일 메타데이터 (실물은 Cloudflare R2, 여기엔 키만 저장) ──
+model File {
+  id           String   @id @default(cuid())
+  filename     String              // 원본 파일명
+  storageKey   String   @unique   // R2 오브젝트 키
+  mimeType     String
+  size         Int                 // bytes
+  uploadedById String
+  taskId       String?
+  createdAt    DateTime @default(now())
+
+  uploadedBy User  @relation(fields: [uploadedById], references: [id])
+  task       Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([uploadedById])
+}
+
+
+// ── 업무도구 카테고리 ──
+model ToolCategory {
+  id        String     @id @default(cuid())
+  name      String
+  order     Int        @default(0)
+  createdAt DateTime   @default(now())
+  links     ToolLink[]
+}
+
+// ── 업무도구 링크 ──
+model ToolLink {
+  id         String       @id @default(cuid())
+  name       String
+  url        String
+  desc       String?
+  emoji      String?      @default("🔗")
+  order      Int          @default(0)
+  categoryId String
+  createdAt  DateTime     @default(now())
+  category   ToolCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId])
+}
