@@ -6,7 +6,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/api/auth"];
+const PUBLIC_PATHS = ["/login", "/api/auth", "/api/cron"];
 
 // NextAuth v5가 사용하는 세션 쿠키 이름
 const SESSION_COOKIE =
