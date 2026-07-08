@@ -1,8 +1,19 @@
-export default function UsersPage() {
-  return (
-    <div className="p-8">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">직원 관리</h1>
-      <p className="text-gray-500 text-sm">Phase 2에서 구현됩니다.</p>
-    </div>
-  );
+import { auth } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import { db } from "@/lib/db";
+import UsersClient from "./UsersClient";
+
+export const dynamic = "force-dynamic";
+
+export default async function UsersPage() {
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+  if (!["OWNER", "MANAGER"].includes(session.user.role)) redirect("/");
+
+  const users = await db.user.findMany({
+    orderBy: [{ status: "asc" }, { createdAt: "asc" }],
+    select: { id: true, email: true, name: true, role: true, position: true, status: true, createdAt: true, firstLoginAt: true },
+  });
+
+  return <UsersClient initialUsers={users as never} currentUserId={session.user.id} />;
 }
